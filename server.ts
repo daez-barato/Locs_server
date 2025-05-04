@@ -16,12 +16,14 @@ import authRoutes from "./routes/auth";
 import userRoutes from "./routes/users";
 import coinRoutes from "./routes/coins";
 import followersRoutes from "./routes/followers";
+import streamRoutes from "./routes/stream";
 
 // Use routes
 app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/coins", coinRoutes);
 app.use("/followers", followersRoutes);
+app.use("/stream", streamRoutes); 
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);

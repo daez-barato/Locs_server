@@ -23,7 +23,7 @@ export const getUserFollowerCount: RequestHandler = async (req: AuthenticatedReq
             SELECT COUNT(*) AS follower_count
             FROM users u
             JOIN followers f ON f.follower_id = u.id
-            WHERE f.following_id = $1;`, [userId]
+            WHERE f.followed_id = $1;`, [userId]
         )
 
         res.status(200).json({followers: result.rows[0].follower_count});
@@ -44,7 +44,7 @@ export const getUserFollowingCount: RequestHandler = async (req: AuthenticatedRe
         const result = await pool.query(`
             SELECT COUNT(*) AS following_count
             FROM users u
-            JOIN followers f ON f.following_id = u.id
+            JOIN followers f ON f.followed_id = u.id
             WHERE f.follower_id = $1;`, [userId]
         )
 

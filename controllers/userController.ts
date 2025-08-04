@@ -26,3 +26,39 @@ export const getUserById: RequestHandler = async (req: AuthenticatedRequest, res
         res.status(500).json({ error: "Internal server error." });
     }
 };
+
+export const getUserByUsername: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
+    const userName = req.params.username;
+
+    try {
+        
+        const created = await pool.query(
+            `SELECT e.id, t.title, t.description 
+            FROM users u
+            JOIN events e ON u.id = e.creator_id
+            JOIN templates t ON e.template = t.id
+            WHERE u.username = $1`, 
+            [userName]
+        );
+
+        const participated = await pool.query(
+            `SELECT e.id, t.title, t.description 
+            FROM users u
+            JOIN bets b ON u.id = b.user_id
+            JOIN events e ON b.event_id = e.id
+            JOIN templates t ON e.template = t.id
+            WHERE u.username = $1
+            GROUP BY e.id, t.title, t.description`,
+            [userName]
+        );
+
+        res.status(200).json({
+            created: created.rows,
+            participated: participated.rows,
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

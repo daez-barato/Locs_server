@@ -10,7 +10,11 @@ const cors_1 = __importDefault(require("cors"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 app.use(express_1.default.json());
-app.use((0, cors_1.default)());
+app.use((0, cors_1.default)({
+    origin: '*', // or your frontend domain
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 const PORT = parseInt(process.env.SERVER_PORT || "3000", 10);
 // Import routes
 const auth_1 = __importDefault(require("./routes/auth"));

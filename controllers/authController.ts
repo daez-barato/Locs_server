@@ -2,6 +2,8 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { Pool } from "pg";
 import { Request, RequestHandler, Response } from "express";
+import dotenv from "dotenv";
+dotenv.config();
 
 const pool = new Pool({
     user: process.env.DATABASE_USER,
@@ -68,7 +70,7 @@ export const login: RequestHandler = async (req: Request, res: Response) => {
         const valid = await bcrypt.compare(password, user.password);
 
         if (!valid) {
-            res.status(401).json({ error: "Invalid credentials" });
+            res.status(401).json({ error: "Wrong Password" });
             return;
         }
 

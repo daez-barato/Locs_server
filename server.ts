@@ -7,7 +7,13 @@ dotenv.config();
 
 const app: Application = express();
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: '*', // or your frontend domain
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+
 
 const PORT: number = parseInt(process.env.SERVER_PORT || "3000", 10);
 

@@ -7,6 +7,8 @@ exports.login = exports.register = void 0;
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const pg_1 = require("pg");
+const dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config();
 const pool = new pg_1.Pool({
     user: process.env.DATABASE_USER,
     host: process.env.DATABASE_HOST,
@@ -60,7 +62,7 @@ const login = async (req, res) => {
         const user = result.rows[0];
         const valid = await bcryptjs_1.default.compare(password, user.password);
         if (!valid) {
-            res.status(401).json({ error: "Invalid credentials" });
+            res.status(401).json({ error: "Wrong Password" });
             return;
         }
         const token = jsonwebtoken_1.default.sign({ id: user.id }, process.env.TOKEN_SECRET || "");

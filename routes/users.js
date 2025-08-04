@@ -9,4 +9,5 @@ const authenticateToken_1 = __importDefault(require("../middleware/authenticateT
 const router = express_1.default.Router();
 // Get user by ID (protected route)
 router.get("/user", authenticateToken_1.default, userController_1.getUserById);
+router.get("/user/:username", authenticateToken_1.default, userController_1.getUserByUsername);
 exports.default = router;

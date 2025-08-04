@@ -1,9 +1,13 @@
 import { Request, Response, NextFunction } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
+import dotenv from "dotenv";
+dotenv.config();
+
 
 export interface AuthenticatedRequest extends Request {
     user?: { id: string } & JwtPayload; // Add a `user` property to the request object
 }
+
 
 const authenticateToken = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     const authHeader = req.headers["authorization"];

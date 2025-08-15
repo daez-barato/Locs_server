@@ -31,25 +31,31 @@ export const getUserByUsername: RequestHandler = async (req: AuthenticatedReques
     const userName = req.params.username;
 
     try {
+
+        const user = await pool.query(`
+            SELECT id FROM users WHERE username = $1;
+        `, [userName])
+
+        if (user.rowCount === 0){
+            throw Error('User not found');
+        }
         
         const created = await pool.query(
             `SELECT e.id, t.title, t.description 
-            FROM users u
-            JOIN events e ON u.id = e.creator_id
+            FROM events e 
             JOIN templates t ON e.template = t.id
-            WHERE u.username = $1`, 
-            [userName]
+            WHERE $1 = e.creator_id;`, 
+            [user.rows[0].id]
         );
 
         const participated = await pool.query(
             `SELECT e.id, t.title, t.description 
-            FROM users u
-            JOIN bets b ON u.id = b.user_id
+            FROM bets b  
             JOIN events e ON b.event_id = e.id
             JOIN templates t ON e.template = t.id
-            WHERE u.username = $1
+            WHERE $1 = b.user_id
             GROUP BY e.id, t.title, t.description`,
-            [userName]
+            [user.rows[0].id]
         );
 
         res.status(200).json({

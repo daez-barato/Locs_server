@@ -22,16 +22,16 @@ import authRoutes from "./routes/auth";
 import userRoutes from "./routes/users";
 import coinRoutes from "./routes/coins";
 import followersRoutes from "./routes/followers";
-import recommendationRoutes from "./routes/recomendations";
 import eventRoutes from "./routes/events";
+import searchRoutes from "./routes/search";
 
 // Use routes
 app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/coins", coinRoutes);
 app.use("/followers", followersRoutes); 
-app.use("/recomendations", recommendationRoutes )
-app.use("/event", eventRoutes)
+app.use("/event", eventRoutes);
+app.use("/search", searchRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);

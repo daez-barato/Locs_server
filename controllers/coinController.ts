@@ -15,7 +15,6 @@ export const getUserCoins: RequestHandler = async (req: AuthenticatedRequest, re
     const userId = req.user?.id;
 
     try{
-        console.log("Getting user coins")
         const result = await pool.query("SELECT coins FROM users WHERE id= $1", [userId]);
 
         if (result.rowCount === 0){

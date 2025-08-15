@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.endEvent = exports.lockEvent = exports.placeBet = exports.getEventBets = exports.postEvent = exports.getEventInformation = void 0;
+exports.getUserFollowingPosts = exports.getUserLiveEvents = exports.getUserLiveBets = exports.getTemplate = exports.postTemplate = exports.endEvent = exports.lockEvent = exports.placeBet = exports.getEventBets = exports.postEvent = exports.getEventInformation = void 0;
 const pg_1 = require("pg");
 const pool = new pg_1.Pool({
     user: process.env.DATABASE_USER,
@@ -24,7 +24,8 @@ const getEventInformation = async (req, res) => {
                 t.id AS template_id,
                 t.title,
                 t.description,
-                t.creator_id AS template_creator_id
+                t.creator_id AS template_creator_id,
+                t.public AS template_posted
             FROM events e
             JOIN templates t ON e.template = t.id
             JOIN users u ON e.creator_id = u.id
@@ -78,27 +79,29 @@ const getEventInformation = async (req, res) => {
 exports.getEventInformation = getEventInformation;
 const postEvent = async (req, res) => {
     var _a, _b;
-    const { optionsDict, title, description, image, privacy, time } = req.body;
+    let { optionsDict, title, description, image, privacy, time, templateId } = req.body;
     const client = await pool.connect();
-    const is_public = privacy === "public";
+    const is_public = privacy === "Public";
     const cleanTime = time.replace(/,\s*/g, ' ');
     try {
         await client.query(`BEGIN;`);
         // 1. Insert Template
-        const { rows: templateRows } = await client.query(`INSERT INTO templates (title, description, creator_id)
-            VALUES ($1, $2, $3) RETURNING id;`, [title, description, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
-        if (templateRows.length === 0) {
-            throw new Error("Failed to create template");
-        }
-        const templateId = templateRows[0].id;
-        // 2. Insert Questions + Options
-        const questionKeys = Object.keys(optionsDict);
-        for (const question of questionKeys) {
-            await client.query(`INSERT INTO questions (template_id, title) VALUES ($1, $2);`, [templateId, question]);
-            const options = optionsDict[question];
-            for (const option of options) {
-                await client.query(`INSERT INTO options (question, template_id, title)
-                    VALUES ($1, $2, $3);`, [question, templateId, option]);
+        if (!templateId) {
+            const { rows: templateRows } = await client.query(`INSERT INTO templates (title, description, creator_id)
+                VALUES ($1, $2, $3) RETURNING id;`, [title, description, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+            if (templateRows.length === 0) {
+                throw new Error("Failed to create template");
+            }
+            templateId = templateRows[0].id;
+            // 2. Insert Questions + Options
+            const questionKeys = Object.keys(optionsDict);
+            for (const question of questionKeys) {
+                await client.query(`INSERT INTO questions (template_id, title) VALUES ($1, $2);`, [templateId, question]);
+                const options = optionsDict[question];
+                for (const option of options) {
+                    await client.query(`INSERT INTO options (question, template_id, title)
+                        VALUES ($1, $2, $3);`, [question, templateId, option]);
+                }
             }
         }
         // 3. Insert Event
@@ -259,12 +262,12 @@ const endEvent = async (req, res) => {
                         UPDATE users
                         SET coins = coins + $1
                         WHERE id = $2
-                    `, [bet.amount, bet.user_id]);
+                    `, [parseInt(bet.amount), bet.user_id]);
                     await client.query(`
                         UPDATE bets
                         SET payout = $1
                         WHERE event_id = $2 AND question = $3 AND user_id = $4 AND option = $5;
-                    `, [bet.amount, eventId, question, bet.user_id, bet.option]);
+                    `, [parseInt(bet.amount), eventId, question, bet.user_id, bet.option]);
                 }
             }
             else {
@@ -303,3 +306,168 @@ const endEvent = async (req, res) => {
     }
 };
 exports.endEvent = endEvent;
+const postTemplate = async (req, res) => {
+    var _a;
+    const { template } = req.params;
+    try {
+        // Update the template to be public
+        await pool.query(`
+            UPDATE templates SET public = TRUE WHERE id = $1 AND creator_id = $2;
+        `, [template, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+        res.status(200).json({ message: 'Template posted successfully' });
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.postTemplate = postTemplate;
+const getTemplate = async (req, res) => {
+    var _a;
+    const { templateId } = req.params;
+    try {
+        const template = await pool.query(`
+            SELECT 
+                t.id AS template_id,
+                t.title,
+                t.description,
+                t.creator_id AS template_creator_id,
+                t.image_url
+            FROM templates t
+            WHERE t.id = $1 AND (t.public = TRUE OR t.creator_id = $2);
+        `, [templateId, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+        if (template.rows.length === 0) {
+            res.status(404).json({ message: "Template not found" });
+            return;
+        }
+        ;
+        // Fetch questions and options for the template
+        const questions = await pool.query(`
+            SELECT 
+                q.title AS question,
+                o.title AS option
+            FROM questions q
+            JOIN options o ON q.template_id = o.template_id AND q.title = o.question
+            WHERE q.template_id = $1;
+        `, [templateId]);
+        if (questions.rows.length === 0) {
+            res.status(404).json({ message: "No questions found for this template" });
+            return;
+        }
+        ;
+        const optionsDict = {};
+        for (const row of questions.rows) {
+            if (!optionsDict[row.question]) {
+                optionsDict[row.question] = [];
+            }
+            ;
+            optionsDict[row.question].push(row.option);
+        }
+        ;
+        console.log("Template retrieved successfully:", template.rows);
+        console.log("Questions and options:", optionsDict);
+        res.status(200).json({ template: template.rows[0], questions: optionsDict });
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.getTemplate = getTemplate;
+const getUserLiveBets = async (req, res) => {
+    var _a;
+    try {
+        const liveBets = await pool.query(`
+            SELECT DISTINCT
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                t.image_url as thumbnail,
+                CASE 
+                    WHEN e.creator_id = $1 THEN TRUE 
+                    ELSE FALSE 
+                END AS is_creator,
+                COUNT(DISTINCT c.user_id) as participants_count
+            FROM bets b
+            JOIN events e ON b.event_id = e.id
+            JOIN templates t ON e.template = t.id
+            LEFT JOIN bets c ON e.id = c.event_id
+            WHERE b.user_id = $1 AND e.decided = FALSE
+            GROUP BY e.id, t.id
+            ORDER BY e.expire_date ASC;
+        `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+        console.log("User live bets retrieved successfully:", liveBets.rows);
+        res.status(200).json(liveBets.rows);
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.getUserLiveBets = getUserLiveBets;
+const getUserLiveEvents = async (req, res) => {
+    var _a;
+    try {
+        const liveEvents = await pool.query(`
+            SELECT
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                t.image_url as thumbnail,
+                CASE 
+                    WHEN e.creator_id = $1 THEN TRUE 
+                    ELSE FALSE 
+                END AS is_creator,
+                COUNT( DISTINCT b.user_id) as participants_count
+            FROM events e
+            JOIN templates t ON e.template = t.id
+            LEFT JOIN bets b ON e.id = b.event_id
+            WHERE e.creator_id = $1 AND e.decided = FALSE
+            GROUP BY e.id, t.id
+            ORDER BY e.expire_date ASC;
+        `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+        console.log("User live events retrieved successfully:", liveEvents.rows);
+        res.status(200).json(liveEvents.rows);
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.getUserLiveEvents = getUserLiveEvents;
+const getUserFollowingPosts = async (req, res) => {
+    var _a;
+    try {
+        const followingPosts = await pool.query(`
+            SELECT 
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                t.image_url as thumbnail,
+                u.username AS creator_username,
+                FALSE AS is_creator,
+                COUNT(DISTINCT b.user_id) as participants_count
+            FROM events e
+            JOIN templates t ON e.template = t.id
+            JOIN users u ON e.creator_id = u.id
+            JOIN followers f ON f.follower_id = $1 AND f.followed_id = e.creator_id
+            LEFT JOIN bets b ON e.id = b.event_id
+            WHERE e.decided = FALSE AND e.creator_id != $1
+            GROUP BY e.id, t.id, u.username
+            ORDER BY e.expire_date ASC;
+        `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+        console.log("User following posts retrieved successfully:", followingPosts.rows);
+        res.status(200).json({ posts: followingPosts.rows });
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.getUserFollowingPosts = getUserFollowingPosts;

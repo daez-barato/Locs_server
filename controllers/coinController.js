@@ -13,7 +13,6 @@ const getUserCoins = async (req, res) => {
     var _a;
     const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
     try {
-        console.log("Getting user coins");
         const result = await pool.query("SELECT coins FROM users WHERE id= $1", [userId]);
         if (result.rowCount === 0) {
             res.status(404).json({ error: "User not found" });

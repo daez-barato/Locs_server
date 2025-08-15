@@ -13,4 +13,9 @@ router.get("/getEventBets/:eventId", authenticateToken_1.default, eventControlle
 router.post("/placeBet/:eventId", authenticateToken_1.default, eventController_1.placeBet);
 router.patch("/lockEvent/:eventId", authenticateToken_1.default, eventController_1.lockEvent);
 router.post("/endEvent/:eventId", authenticateToken_1.default, eventController_1.endEvent);
+router.patch("/postTemplate/:template", authenticateToken_1.default, eventController_1.postTemplate);
+router.get("/getTemplate/:templateId", authenticateToken_1.default, eventController_1.getTemplate);
+router.get("/getUserLiveBets", authenticateToken_1.default, eventController_1.getUserLiveBets);
+router.get("/getUserLiveEvents", authenticateToken_1.default, eventController_1.getUserLiveEvents);
+router.get("/getUserFollowingPosts", authenticateToken_1.default, eventController_1.getUserFollowingPosts);
 exports.default = router;

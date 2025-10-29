@@ -1,17 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getUserFollowingPosts = exports.getUserLiveEvents = exports.getUserLiveBets = exports.getTemplate = exports.postTemplate = exports.endEvent = exports.lockEvent = exports.placeBet = exports.getEventBets = exports.postEvent = exports.getEventInformation = void 0;
-const pg_1 = require("pg");
-const pool = new pg_1.Pool({
-    user: process.env.DATABASE_USER,
-    host: process.env.DATABASE_HOST,
-    password: process.env.DATABASE_PASSWORD,
-    database: process.env.DATABASE_NAME,
-    port: parseInt(process.env.DATABASE_PORT || "5432", 10),
-});
+exports.getUserParticipatedEvents = exports.getUserCreatedEvents = exports.getUserFollowingPosts = exports.getUserLiveEvents = exports.getUserLiveBets = exports.getTemplate = exports.postTemplate = exports.endEvent = exports.lockEvent = exports.placeBet = exports.getEventBets = exports.postEvent = exports.getEventInformation = void 0;
+const server_1 = require("../server");
+const client_s3_1 = require("@aws-sdk/client-s3");
+const imageUtils_1 = require("../utils/imageUtils");
 const getEventInformation = async (req, res) => {
+    var _a;
     const { eventId } = req.params;
-    const client = await pool.connect();
+    const client = await server_1.pool.connect();
     try {
         const eventInfo = await client.query(`
             SELECT 
@@ -21,22 +17,39 @@ const getEventInformation = async (req, res) => {
                 e.public,
                 e.creator_id AS event_creator_id,
                 u.username AS event_creator,
+                t.image_url,
                 t.id AS template_id,
                 t.title,
                 t.description,
                 t.creator_id AS template_creator_id,
+                CASE 
+                    WHEN f.follower_id IS NOT NULL THEN TRUE
+                    ELSE FALSE
+                END AS is_following,
+                CASE 
+                    WHEN fr.requested IS NOT NULL THEN TRUE
+                    ELSE FALSE
+                END AS has_requested,
+                CASE 
+                    WHEN s.user_id IS NOT NULL THEN TRUE
+                    ELSE FALSE
+                END AS template_saved,
                 t.public AS template_posted
             FROM events e
             JOIN templates t ON e.template = t.id
             JOIN users u ON e.creator_id = u.id
+            LEFT JOIN followers f ON f.followed_id = u.id AND f.follower_id = $2
+            LEFT JOIN follow_requests fr ON fr.requested = u.id AND fr.requester = $2
+            LEFT JOIN saved_templates s ON s.template_id = t.id AND s.user_id = $2
             WHERE e.id = $1;
-        `, [eventId]);
+        `, [eventId, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
         if (eventInfo.rows.length === 0) {
             console.error('Event not found');
             res.status(404).json({ message: "Event not found" });
             return;
         }
         ;
+        const signedUrl = await (0, imageUtils_1.createSignedUrl)(eventInfo.rows[0].image_url);
         const questions = await client.query(`
             SELECT 
                 q.title AS question,
@@ -61,9 +74,9 @@ const getEventInformation = async (req, res) => {
         }, {});
         const result = {
             ...eventInfo.rows[0],
+            image_url: signedUrl,
             questions: structuredQuestions,
         };
-        console.log("Event information retrieved successfully:", result);
         res.status(200).json(result);
     }
     catch (err) {
@@ -78,26 +91,43 @@ const getEventInformation = async (req, res) => {
 };
 exports.getEventInformation = getEventInformation;
 const postEvent = async (req, res) => {
-    var _a, _b;
-    let { optionsDict, title, description, image, privacy, time, templateId } = req.body;
-    const client = await pool.connect();
+    var _a, _b, _c;
+    let { optionsDict, title, description, privacy, time, templateId } = req.body;
+    const client = await server_1.pool.connect();
     const is_public = privacy === "Public";
     const cleanTime = time.replace(/,\s*/g, ' ');
     try {
+        const file = req.file;
+        let imageUrl = process.env.PLACEHOLDER_EVENT_IMAGE;
+        if (file) {
+            // generate unique filename
+            const filename = `events/${(_a = req.user) === null || _a === void 0 ? void 0 : _a.id}-${Date.now()}`;
+            // upload to S3
+            const params = {
+                Bucket: "odds-images",
+                Key: filename,
+                Body: file.buffer,
+                ContentType: file.mimetype,
+            };
+            await server_1.s3.send(new client_s3_1.PutObjectCommand(params));
+            imageUrl = filename;
+        }
+        ;
         await client.query(`BEGIN;`);
         // 1. Insert Template
         if (!templateId) {
-            const { rows: templateRows } = await client.query(`INSERT INTO templates (title, description, creator_id)
-                VALUES ($1, $2, $3) RETURNING id;`, [title, description, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
+            const { rows: templateRows } = await client.query(`INSERT INTO templates (title, description, creator_id, image_url)
+                VALUES ($1, $2, $3, $4) RETURNING id;`, [title, description, (_b = req.user) === null || _b === void 0 ? void 0 : _b.id, imageUrl]);
             if (templateRows.length === 0) {
                 throw new Error("Failed to create template");
             }
             templateId = templateRows[0].id;
             // 2. Insert Questions + Options
-            const questionKeys = Object.keys(optionsDict);
+            const parsedOptions = JSON.parse(optionsDict);
+            const questionKeys = Object.keys(parsedOptions);
             for (const question of questionKeys) {
                 await client.query(`INSERT INTO questions (template_id, title) VALUES ($1, $2);`, [templateId, question]);
-                const options = optionsDict[question];
+                const options = parsedOptions[question];
                 for (const option of options) {
                     await client.query(`INSERT INTO options (question, template_id, title)
                         VALUES ($1, $2, $3);`, [question, templateId, option]);
@@ -106,7 +136,7 @@ const postEvent = async (req, res) => {
         }
         // 3. Insert Event
         const { rows: eventRows } = await client.query(`INSERT INTO events (creator_id, template, expire_date, public)
-            VALUES ($1, $2, now() + $3::interval, $4) RETURNING id;`, [(_b = req.user) === null || _b === void 0 ? void 0 : _b.id, templateId, cleanTime, is_public]);
+            VALUES ($1, $2, now() + $3::interval, $4) RETURNING id;`, [(_c = req.user) === null || _c === void 0 ? void 0 : _c.id, templateId, cleanTime, is_public]);
         if (eventRows.length === 0) {
             throw new Error("Failed to create event");
         }
@@ -126,7 +156,7 @@ exports.postEvent = postEvent;
 const getEventBets = async (req, res) => {
     const { eventId } = req.params;
     try {
-        const bets = await pool.query(`
+        const bets = await server_1.pool.query(`
             SELECT 
                 b.user_id,
                 u.username,
@@ -138,7 +168,6 @@ const getEventBets = async (req, res) => {
             JOIN users u ON b.user_id = u.id
             WHERE b.event_id = $1;
         `, [eventId]);
-        console.log("Bets retrieved successfully:", bets.rows);
         res.status(200).json(bets.rows);
     }
     catch (err) {
@@ -151,12 +180,17 @@ const placeBet = async (req, res) => {
     var _a, _b;
     const { eventId } = req.params;
     const { question, option } = req.body;
-    const amount = parseFloat(req.body.amount);
-    if (!question || !option || isNaN(amount) || amount <= 0) {
-        res.status(400).json({ error: "Invalid bet data" });
+    const amount = Number(req.body.amount);
+    // Validate input
+    if (!question ||
+        !option ||
+        isNaN(amount) ||
+        amount <= 0 ||
+        !Number.isInteger(amount)) {
+        res.status(400).json({ error: "Invalid bet data — amount must be a positive integer" });
         return;
     }
-    const client = await pool.connect();
+    const client = await server_1.pool.connect();
     try {
         const eventCheck = await client.query(`
             SELECT locked, template FROM events WHERE id = $1;
@@ -189,7 +223,6 @@ const placeBet = async (req, res) => {
         }
         await client.query('COMMIT');
         res.status(201).json({ message: "Bet placed successfully", coins: balanceUpdate.rows[0].coins, success: true });
-        console.log("Bet placed successfully:", true);
         return;
     }
     catch (err) {
@@ -207,7 +240,7 @@ const lockEvent = async (req, res) => {
     var _a;
     const { eventId } = req.params;
     try {
-        const lock = await pool.query(`
+        const lock = await server_1.pool.query(`
             UPDATE events
             SET
                 locked = TRUE
@@ -230,7 +263,7 @@ const endEvent = async (req, res) => {
     var _a;
     const { eventId } = req.params;
     const { winningOptions } = req.body;
-    const client = await pool.connect();
+    const client = await server_1.pool.connect();
     try {
         await client.query('BEGIN');
         const event = await client.query(`
@@ -311,7 +344,7 @@ const postTemplate = async (req, res) => {
     const { template } = req.params;
     try {
         // Update the template to be public
-        await pool.query(`
+        await server_1.pool.query(`
             UPDATE templates SET public = TRUE WHERE id = $1 AND creator_id = $2;
         `, [template, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
         res.status(200).json({ message: 'Template posted successfully' });
@@ -326,7 +359,7 @@ const getTemplate = async (req, res) => {
     var _a;
     const { templateId } = req.params;
     try {
-        const template = await pool.query(`
+        const template = await server_1.pool.query(`
             SELECT 
                 t.id AS template_id,
                 t.title,
@@ -341,8 +374,9 @@ const getTemplate = async (req, res) => {
             return;
         }
         ;
+        const signedUrl = await (0, imageUtils_1.createSignedUrl)(template.rows[0].image_url);
         // Fetch questions and options for the template
-        const questions = await pool.query(`
+        const questions = await server_1.pool.query(`
             SELECT 
                 q.title AS question,
                 o.title AS option
@@ -364,9 +398,7 @@ const getTemplate = async (req, res) => {
             optionsDict[row.question].push(row.option);
         }
         ;
-        console.log("Template retrieved successfully:", template.rows);
-        console.log("Questions and options:", optionsDict);
-        res.status(200).json({ template: template.rows[0], questions: optionsDict });
+        res.status(200).json({ template: { ...template.rows[0], image_url: signedUrl }, questions: optionsDict });
     }
     catch (err) {
         console.error('Database error:', err);
@@ -377,7 +409,7 @@ exports.getTemplate = getTemplate;
 const getUserLiveBets = async (req, res) => {
     var _a;
     try {
-        const liveBets = await pool.query(`
+        const liveBets = await server_1.pool.query(`
             SELECT DISTINCT
                 e.id,
                 e.expire_date,
@@ -398,8 +430,14 @@ const getUserLiveBets = async (req, res) => {
             GROUP BY e.id, t.id
             ORDER BY e.expire_date ASC;
         `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
-        console.log("User live bets retrieved successfully:", liveBets.rows);
-        res.status(200).json(liveBets.rows);
+        const rowsWithSignedUrls = await Promise.all(liveBets.rows.map(async (row) => {
+            const signedUrl = await (0, imageUtils_1.createSignedUrl)(row.thumbnail); // 1h ex
+            return {
+                ...row,
+                thumbnail: signedUrl,
+            };
+        }));
+        res.status(200).json(rowsWithSignedUrls);
     }
     catch (err) {
         console.error('Database error:', err);
@@ -410,7 +448,7 @@ exports.getUserLiveBets = getUserLiveBets;
 const getUserLiveEvents = async (req, res) => {
     var _a;
     try {
-        const liveEvents = await pool.query(`
+        const liveEvents = await server_1.pool.query(`
             SELECT
                 e.id,
                 e.expire_date,
@@ -430,8 +468,14 @@ const getUserLiveEvents = async (req, res) => {
             GROUP BY e.id, t.id
             ORDER BY e.expire_date ASC;
         `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
-        console.log("User live events retrieved successfully:", liveEvents.rows);
-        res.status(200).json(liveEvents.rows);
+        const rowsWithSignedUrls = await Promise.all(liveEvents.rows.map(async (row) => {
+            const signedUrl = await (0, imageUtils_1.createSignedUrl)(row.thumbnail); // 1h expiry
+            return {
+                ...row,
+                thumbnail: signedUrl,
+            };
+        }));
+        res.status(200).json(rowsWithSignedUrls);
     }
     catch (err) {
         console.error('Database error:', err);
@@ -441,8 +485,9 @@ const getUserLiveEvents = async (req, res) => {
 exports.getUserLiveEvents = getUserLiveEvents;
 const getUserFollowingPosts = async (req, res) => {
     var _a;
+    const offset = parseInt(req.params.offset) || 0;
     try {
-        const followingPosts = await pool.query(`
+        const followingPosts = await server_1.pool.query(`
             SELECT 
                 e.id,
                 e.expire_date,
@@ -458,12 +503,19 @@ const getUserFollowingPosts = async (req, res) => {
             JOIN users u ON e.creator_id = u.id
             JOIN followers f ON f.follower_id = $1 AND f.followed_id = e.creator_id
             LEFT JOIN bets b ON e.id = b.event_id
-            WHERE e.decided = FALSE AND e.creator_id != $1
+            WHERE e.decided = FALSE AND e.creator_id != $1 AND expire_date >= NOW()
             GROUP BY e.id, t.id, u.username
-            ORDER BY e.expire_date ASC;
-        `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id]);
-        console.log("User following posts retrieved successfully:", followingPosts.rows);
-        res.status(200).json({ posts: followingPosts.rows });
+            ORDER BY e.expire_date ASC
+            LIMIT 10 OFFSET $2;
+        `, [(_a = req.user) === null || _a === void 0 ? void 0 : _a.id, offset]);
+        const rowsWithSignedUrls = await Promise.all(followingPosts.rows.map(async (row) => {
+            const signedUrl = await (0, imageUtils_1.createSignedUrl)(row.thumbnail); // 1h expiry
+            return {
+                ...row,
+                thumbnail: signedUrl,
+            };
+        }));
+        res.status(200).json({ posts: rowsWithSignedUrls });
     }
     catch (err) {
         console.error('Database error:', err);
@@ -471,3 +523,102 @@ const getUserFollowingPosts = async (req, res) => {
     }
 };
 exports.getUserFollowingPosts = getUserFollowingPosts;
+const getUserCreatedEvents = async (req, res) => {
+    var _a;
+    const { id, offset } = req.params;
+    const offsetNum = parseInt(offset) || 0;
+    try {
+        const createdEvents = await server_1.pool.query(`SELECT
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                e.decided,
+                t.image_url as thumbnail,
+                c.username AS creator_username,
+                CASE 
+                    WHEN e.creator_id = $2 THEN TRUE 
+                    ELSE FALSE 
+                END AS is_creator,
+                COUNT(DISTINCT b.user_id) as participants_count
+            FROM events e
+            JOIN users c ON e.creator_id = c.id
+            JOIN templates t ON e.template = t.id
+            LEFT JOIN bets b ON e.id = b.event_id
+            WHERE $1 = e.creator_id
+            GROUP BY e.id, t.id, t.image_url, c.username
+            ORDER BY 
+                CASE 
+                    WHEN e.decided = TRUE THEN 2   -- decided last
+                    WHEN e.locked = TRUE THEN 1    -- locked after unlocked
+                    ELSE 0                         -- unlocked first
+                END,
+                e.expire_date ASC,
+                e.created_at DESC
+            LIMIT 10 OFFSET $3 ;`, [id, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id, offsetNum]);
+        const rowsWithSignedUrls = await Promise.all(createdEvents.rows.map(async (row) => {
+            const signedUrl = await (0, imageUtils_1.createSignedUrl)(row.thumbnail); // 1h expiry
+            return {
+                ...row,
+                thumbnail: signedUrl,
+            };
+        }));
+        res.status(200).json({ events: rowsWithSignedUrls });
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.getUserCreatedEvents = getUserCreatedEvents;
+const getUserParticipatedEvents = async (req, res) => {
+    var _a;
+    const { id, offset } = req.params;
+    const offsetNum = parseInt(offset) || 0;
+    try {
+        const participatedEvents = await server_1.pool.query(`SELECT
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                e.decided,
+                t.image_url as thumbnail,
+                c.username AS creator_username,
+                CASE 
+                    WHEN e.creator_id = $2 THEN TRUE 
+                    ELSE FALSE 
+                END AS is_creator,
+                COUNT(DISTINCT d.user_id) as participants_count
+            FROM bets b  
+            JOIN events e ON b.event_id = e.id
+            JOIN users c ON e.creator_id = c.id
+            JOIN templates t ON e.template = t.id
+            LEFT JOIN bets d ON d.event_id = e.id
+            WHERE $1 = b.user_id
+            GROUP BY e.id, t.title, t.description, t.image_url, c.username
+            ORDER BY 
+                CASE 
+                    WHEN e.decided = TRUE THEN 2   -- decided last
+                    WHEN e.locked = TRUE THEN 1    -- locked after unlocked
+                    ELSE 0                         -- unlocked first
+                END,
+                e.expire_date ASC,
+                e.created_at DESC
+            LIMIT 10 OFFSET $3;`, [id, (_a = req.user) === null || _a === void 0 ? void 0 : _a.id, offsetNum]);
+        const rowsWithSignedUrls = await Promise.all(participatedEvents.rows.map(async (row) => {
+            const signedUrl = await (0, imageUtils_1.createSignedUrl)(row.thumbnail); // 1h expiry
+            return {
+                ...row,
+                thumbnail: signedUrl,
+            };
+        }));
+        res.status(200).json({ events: rowsWithSignedUrls });
+    }
+    catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+exports.getUserParticipatedEvents = getUserParticipatedEvents;

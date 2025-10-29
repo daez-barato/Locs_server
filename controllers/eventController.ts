@@ -1,21 +1,15 @@
-import { RequestHandler, Request, Response } from "express";
-import { Pool } from "pg";
+import { RequestHandler, Response } from "express";
 import { AuthenticatedRequest } from "../middleware/authenticateToken";
-import { parse } from "path";
-
-const pool = new Pool({
-    user: process.env.DATABASE_USER,
-    host: process.env.DATABASE_HOST,
-    password: process.env.DATABASE_PASSWORD,
-    database: process.env.DATABASE_NAME,
-    port: parseInt(process.env.DATABASE_PORT || "5432", 10),
-});
+import { pool, s3 } from "../server";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { createSignedUrl } from "../utils/imageUtils";
 
 export const getEventInformation: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
     const { eventId }  = req.params;
     const client = await pool.connect();
     
     try {
+
         const eventInfo = await client.query(`
             SELECT 
                 e.expire_date,
@@ -24,22 +18,40 @@ export const getEventInformation: RequestHandler = async (req: AuthenticatedRequ
                 e.public,
                 e.creator_id AS event_creator_id,
                 u.username AS event_creator,
+                t.image_url,
                 t.id AS template_id,
                 t.title,
                 t.description,
                 t.creator_id AS template_creator_id,
+                CASE 
+                    WHEN f.follower_id IS NOT NULL THEN TRUE
+                    ELSE FALSE
+                END AS is_following,
+                CASE 
+                    WHEN fr.requested IS NOT NULL THEN TRUE
+                    ELSE FALSE
+                END AS has_requested,
+                CASE 
+                    WHEN s.user_id IS NOT NULL THEN TRUE
+                    ELSE FALSE
+                END AS template_saved,
                 t.public AS template_posted
             FROM events e
             JOIN templates t ON e.template = t.id
             JOIN users u ON e.creator_id = u.id
+            LEFT JOIN followers f ON f.followed_id = u.id AND f.follower_id = $2
+            LEFT JOIN follow_requests fr ON fr.requested = u.id AND fr.requester = $2
+            LEFT JOIN saved_templates s ON s.template_id = t.id AND s.user_id = $2
             WHERE e.id = $1;
-        `, [eventId]);
+        `, [eventId, req.user?.id]);
         
         if (eventInfo.rows.length === 0) {
             console.error('Event not found');
             res.status(404).json({ message: "Event not found" });
             return;
         };
+
+        const signedUrl = await createSignedUrl(eventInfo.rows[0].image_url);
 
         const questions = await client.query(`
             SELECT 
@@ -68,10 +80,9 @@ export const getEventInformation: RequestHandler = async (req: AuthenticatedRequ
 
         const result = {
             ...eventInfo.rows[0],
+            image_url: signedUrl,
             questions: structuredQuestions,
         };
-
-        console.log("Event information retrieved successfully:", result);
         
         res.status(200).json(result);
 
@@ -82,24 +93,43 @@ export const getEventInformation: RequestHandler = async (req: AuthenticatedRequ
     } finally {
         client.release();
     };
-}
+};
 
 export const postEvent: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
-    let { optionsDict, title, description, image, privacy, time, templateId } = req.body;
+    let { optionsDict, title, description, privacy, time, templateId } = req.body;
     const client = await pool.connect();
   
     const is_public = privacy === "Public";
     const cleanTime = time.replace(/,\s*/g, ' ');
   
     try {
+
+        const file = req.file;
+        let imageUrl = process.env.PLACEHOLDER_EVENT_IMAGE
+        if (file) {
+            // generate unique filename
+            const filename = `events/${req.user?.id}-${Date.now()}`;
+
+            // upload to S3
+            const params = {
+                Bucket: "odds-images",
+                Key: filename,
+                Body: file.buffer,
+                ContentType: file.mimetype,
+            };
+
+            await s3.send(new PutObjectCommand(params));
+            imageUrl = filename;
+        };
+
         await client.query(`BEGIN;`);
     
         // 1. Insert Template
         if (!templateId) {
             const { rows: templateRows } = await client.query(
-                `INSERT INTO templates (title, description, creator_id)
-                VALUES ($1, $2, $3) RETURNING id;`,
-                [title, description, req.user?.id]
+                `INSERT INTO templates (title, description, creator_id, image_url)
+                VALUES ($1, $2, $3, $4) RETURNING id;`,
+                [title, description, req.user?.id, imageUrl]
             );
             if (templateRows.length === 0) {
                 throw new Error("Failed to create template");
@@ -107,7 +137,8 @@ export const postEvent: RequestHandler = async (req: AuthenticatedRequest, res: 
             templateId = templateRows[0].id;
 
             // 2. Insert Questions + Options
-            const questionKeys = Object.keys(optionsDict);
+            const parsedOptions = JSON.parse(optionsDict);
+            const questionKeys = Object.keys(parsedOptions);
         
             for (const question of questionKeys) {
         
@@ -116,7 +147,7 @@ export const postEvent: RequestHandler = async (req: AuthenticatedRequest, res: 
                 [templateId, question]
                 );
         
-                const options = optionsDict[question];
+                const options = parsedOptions[question];
         
                 for (const option of options){
                     await client.query(
@@ -127,9 +158,6 @@ export const postEvent: RequestHandler = async (req: AuthenticatedRequest, res: 
                 }
             }
         }
-    
-        
-    
         // 3. Insert Event
         const { rows: eventRows } = await client.query(
             `INSERT INTO events (creator_id, template, expire_date, public)
@@ -153,7 +181,6 @@ export const postEvent: RequestHandler = async (req: AuthenticatedRequest, res: 
     }
 };
 
-
 export const getEventBets: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
     const { eventId } = req.params;
 
@@ -171,8 +198,6 @@ export const getEventBets: RequestHandler = async (req: AuthenticatedRequest, re
             JOIN users u ON b.user_id = u.id
             WHERE b.event_id = $1;
         `, [eventId]);
-        
-        console.log("Bets retrieved successfully:", bets.rows);
 
         res.status(200).json(bets.rows);
         
@@ -185,10 +210,17 @@ export const getEventBets: RequestHandler = async (req: AuthenticatedRequest, re
 export const placeBet: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
     const { eventId } = req.params;
     const { question, option } = req.body;
-    const amount = parseFloat(req.body.amount);
+    const amount = Number(req.body.amount);
 
-    if (!question || !option || isNaN(amount) || amount <= 0) {
-        res.status(400).json({ error: "Invalid bet data" });
+    // Validate input
+    if (
+        !question ||
+        !option ||
+        isNaN(amount) ||
+        amount <= 0 ||
+        !Number.isInteger(amount)
+    ) {
+        res.status(400).json({ error: "Invalid bet data — amount must be a positive integer" });
         return;
     }
 
@@ -233,7 +265,6 @@ export const placeBet: RequestHandler = async (req: AuthenticatedRequest, res: R
 
         await client.query('COMMIT');
         res.status(201).json({ message: "Bet placed successfully", coins: balanceUpdate.rows[0].coins, success: true });
-        console.log("Bet placed successfully:", true);
         return;
 
     } catch (err: any) {
@@ -404,6 +435,8 @@ export const getTemplate: RequestHandler = async (req: AuthenticatedRequest, res
             return;
         };
 
+        const signedUrl = await createSignedUrl(template.rows[0].image_url);
+
         // Fetch questions and options for the template
         const questions = await pool.query(`
             SELECT 
@@ -427,10 +460,7 @@ export const getTemplate: RequestHandler = async (req: AuthenticatedRequest, res
             };
             optionsDict[row.question].push(row.option);
         };
-
-        console.log("Template retrieved successfully:", template.rows);
-        console.log("Questions and options:", optionsDict);
-        res.status(200).json({template: template.rows[0], questions: optionsDict });
+        res.status(200).json({template: {...template.rows[0], image_url: signedUrl}, questions: optionsDict });
         
     } catch(err){
         console.error('Database error:', err);
@@ -463,8 +493,17 @@ export const getUserLiveBets : RequestHandler = async (req: AuthenticatedRequest
             ORDER BY e.expire_date ASC;
         `, [req.user?.id]);
 
-        console.log("User live bets retrieved successfully:", liveBets.rows);
-        res.status(200).json(liveBets.rows);
+        const rowsWithSignedUrls = await Promise.all(
+            liveBets.rows.map(async (row) => {
+            const signedUrl = await createSignedUrl(row.thumbnail) // 1h ex
+            return {
+                ...row,
+                thumbnail: signedUrl,
+            };
+            })
+        );
+
+        res.status(200).json(rowsWithSignedUrls);
         
     } catch(err){
         console.error('Database error:', err);
@@ -495,8 +534,16 @@ export const getUserLiveEvents: RequestHandler = async (req: AuthenticatedReques
             ORDER BY e.expire_date ASC;
         `, [req.user?.id]);
 
-        console.log("User live events retrieved successfully:", liveEvents.rows);
-        res.status(200).json(liveEvents.rows);
+        const rowsWithSignedUrls = await Promise.all(
+            liveEvents.rows.map(async (row) => {
+                const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+                return {
+                ...row,
+                thumbnail: signedUrl,
+                };
+            })
+        );
+        res.status(200).json(rowsWithSignedUrls);
         
     } catch(err){
         console.error('Database error:', err);
@@ -505,6 +552,8 @@ export const getUserLiveEvents: RequestHandler = async (req: AuthenticatedReques
 };
 
 export const getUserFollowingPosts: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
+    const offset = parseInt(req.params.offset) || 0;
+
     try {
         const followingPosts = await pool.query(`
             SELECT 
@@ -522,13 +571,137 @@ export const getUserFollowingPosts: RequestHandler = async (req: AuthenticatedRe
             JOIN users u ON e.creator_id = u.id
             JOIN followers f ON f.follower_id = $1 AND f.followed_id = e.creator_id
             LEFT JOIN bets b ON e.id = b.event_id
-            WHERE e.decided = FALSE AND e.creator_id != $1
+            WHERE e.decided = FALSE AND e.creator_id != $1 AND expire_date >= NOW()
             GROUP BY e.id, t.id, u.username
-            ORDER BY e.expire_date ASC;
-        `, [req.user?.id]);
+            ORDER BY e.expire_date ASC
+            LIMIT 10 OFFSET $2;
+        `, [req.user?.id, offset]);
 
-        console.log("User following posts retrieved successfully:", followingPosts.rows);
-        res.status(200).json({ posts: followingPosts.rows });
+        const rowsWithSignedUrls = await Promise.all(
+            followingPosts.rows.map(async (row) => {
+                const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+                return {
+                ...row,
+                thumbnail: signedUrl,
+                };
+            })
+        );
+
+        res.status(200).json({ posts: rowsWithSignedUrls });
+        
+    } catch(err){
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getUserCreatedEvents: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
+    const { id, offset } = req.params;
+    const offsetNum = parseInt(offset) || 0;
+
+    try {
+        const createdEvents = await pool.query(
+            `SELECT
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                e.decided,
+                t.image_url as thumbnail,
+                c.username AS creator_username,
+                CASE 
+                    WHEN e.creator_id = $2 THEN TRUE 
+                    ELSE FALSE 
+                END AS is_creator,
+                COUNT(DISTINCT b.user_id) as participants_count
+            FROM events e
+            JOIN users c ON e.creator_id = c.id
+            JOIN templates t ON e.template = t.id
+            LEFT JOIN bets b ON e.id = b.event_id
+            WHERE $1 = e.creator_id
+            GROUP BY e.id, t.id, t.image_url, c.username
+            ORDER BY 
+                CASE 
+                    WHEN e.decided = TRUE THEN 2   -- decided last
+                    WHEN e.locked = TRUE THEN 1    -- locked after unlocked
+                    ELSE 0                         -- unlocked first
+                END,
+                e.expire_date ASC,
+                e.created_at DESC
+            LIMIT 10 OFFSET $3 ;`, 
+            [id, req.user?.id, offsetNum]
+        );
+
+        const rowsWithSignedUrls = await Promise.all(
+            createdEvents.rows.map(async (row) => {
+                const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+                return {
+                ...row,
+                thumbnail: signedUrl,
+                };
+            })
+        );
+
+        res.status(200).json({ events: rowsWithSignedUrls });
+        
+    } catch(err){
+        console.error('Database error:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getUserParticipatedEvents: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
+    const { id, offset } = req.params;
+    const offsetNum = parseInt(offset) || 0;
+
+    try {
+        const participatedEvents = await pool.query(
+            `SELECT
+                e.id,
+                e.expire_date,
+                t.title,
+                t.description,
+                e.locked,
+                e.decided,
+                t.image_url as thumbnail,
+                c.username AS creator_username,
+                CASE 
+                    WHEN e.creator_id = $2 THEN TRUE 
+                    ELSE FALSE 
+                END AS is_creator,
+                COUNT(DISTINCT d.user_id) as participants_count
+            FROM bets b  
+            JOIN events e ON b.event_id = e.id
+            JOIN users c ON e.creator_id = c.id
+            JOIN templates t ON e.template = t.id
+            LEFT JOIN bets d ON d.event_id = e.id
+            WHERE $1 = b.user_id
+            GROUP BY e.id, t.title, t.description, t.image_url, c.username
+            ORDER BY 
+                CASE 
+                    WHEN e.decided = TRUE THEN 2   -- decided last
+                    WHEN e.locked = TRUE THEN 1    -- locked after unlocked
+                    ELSE 0                         -- unlocked first
+                END,
+                e.expire_date ASC,
+                e.created_at DESC
+            LIMIT 10 OFFSET $3;`,
+            [id, req.user?.id, offsetNum]
+        );
+
+
+        const rowsWithSignedUrls = await Promise.all(
+            participatedEvents.rows.map(async (row) => {
+                const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+                return {
+                ...row,
+                thumbnail: signedUrl,
+                };
+            })
+        );
+
+        res.status(200).json({ events: rowsWithSignedUrls });
         
     } catch(err){
         console.error('Database error:', err);

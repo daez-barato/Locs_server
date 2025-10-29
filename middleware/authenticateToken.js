@@ -6,12 +6,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
+;
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers["authorization"];
     if (!authHeader) {
         res.status(401).json({ error: "Missing token" });
         return;
     }
+    ;
     const token = authHeader.split(" ")[1];
     jsonwebtoken_1.default.verify(token, process.env.TOKEN_SECRET || "", (err, user) => {
         if (err) {

@@ -3,11 +3,9 @@ import jwt, { JwtPayload } from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
 
-
 export interface AuthenticatedRequest extends Request {
-    user?: { id: string } & JwtPayload; // Add a `user` property to the request object
-}
-
+    user?: { id: string } & JwtPayload;
+};
 
 const authenticateToken = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     const authHeader = req.headers["authorization"];
@@ -15,7 +13,7 @@ const authenticateToken = (req: AuthenticatedRequest, res: Response, next: NextF
     if (!authHeader) {
         res.status(401).json({ error: "Missing token" });
         return;
-    }
+    };
 
     const token = authHeader.split(" ")[1];
 

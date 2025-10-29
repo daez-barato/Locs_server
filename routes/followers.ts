@@ -1,17 +1,16 @@
 import express, { Router } from "express";
-import  { getUserFollowingCount, getUserFollowerCount, followRequest, checkFollow, unfollow, getUserFollowingList, getUserFollowersList }  from "../controllers/followersController";
+import  {followRequest, unfollow, getUserFollowingList, getUserFollowersList, acceptFollowRequest, rejectFollowRequest, updateRequests }  from "../controllers/followersController";
 import authenticateToken from "../middleware/authenticateToken";
 
 
 const router: Router = express.Router();
 
-// coin check route
-router.get("/UserFollowerCount/:username", authenticateToken, getUserFollowerCount);
-router.get("/UserFollowingCount/:username", authenticateToken, getUserFollowingCount);
-router.post("/request/:username", authenticateToken, followRequest);
-router.get("/checkFollowing/:username", authenticateToken, checkFollow);
-router.delete("/unfollow/:username", authenticateToken, unfollow);
-router.get("/userFollowers/:username", authenticateToken, getUserFollowersList);
-router.get("/userFollowing/:username", authenticateToken, getUserFollowingList);
+router.post("/request/:id", authenticateToken, followRequest);
+router.delete("/unfollow/:id", authenticateToken, unfollow);
+router.get("/userFollowers/:id/:offset", authenticateToken, getUserFollowersList);
+router.get("/userFollowing/:id/:offset", authenticateToken, getUserFollowingList);
+router.post("/accept/:id", authenticateToken, acceptFollowRequest);
+router.delete("/reject/:id", authenticateToken, rejectFollowRequest);
+router.get("/requests/:id", authenticateToken, updateRequests);
 
 export default router;

@@ -1,17 +1,10 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { Pool } from "pg";
 import { Request, RequestHandler, Response } from "express";
 import dotenv from "dotenv";
+import { pool } from "../server";
+import validator from "validator";
 dotenv.config();
-
-const pool = new Pool({
-    user: process.env.DATABASE_USER,
-    host: process.env.DATABASE_HOST,
-    password: process.env.DATABASE_PASSWORD,
-    database: process.env.DATABASE_NAME,
-    port: parseInt(process.env.DATABASE_PORT || "5432", 10),
-});
 
 export const register: RequestHandler = async (req: Request, res: Response) => {
     const { username, email, password } = req.body;
@@ -22,10 +15,15 @@ export const register: RequestHandler = async (req: Request, res: Response) => {
     }
 
     try {
+        if (!validator.isEmail(email)) {
+            res.status(400).json({ error: "Invalid email format." });
+            return;
+        }
+
         const hashedPassword = await bcrypt.hash(password, parseInt(process.env.SALT || "10", 10));
         const result = await pool.query(
-            `INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, email, username`,
-            [username, email, hashedPassword]
+            `INSERT INTO users (username, email, password, image_url) VALUES ($1, $2, $3, $4) RETURNING id, email, username, image_url`,
+            [username, email, hashedPassword, process.env.PLACEHOLDER_USER_IMAGE]
         );
         
         const userInserted = result.rows[0];
@@ -73,7 +71,7 @@ export const login: RequestHandler = async (req: Request, res: Response) => {
             res.status(401).json({ error: "Wrong Password" });
             return;
         }
-
+        
         const token = jwt.sign({ id: user.id }, process.env.TOKEN_SECRET || "");
         res.status(200).json({
             message: "User logged in successfully",

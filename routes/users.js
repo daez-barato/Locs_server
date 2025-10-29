@@ -7,7 +7,9 @@ const express_1 = __importDefault(require("express"));
 const userController_1 = require("../controllers/userController");
 const authenticateToken_1 = __importDefault(require("../middleware/authenticateToken"));
 const router = express_1.default.Router();
-// Get user by ID (protected route)
-router.get("/user", authenticateToken_1.default, userController_1.getUserById);
-router.get("/user/:username", authenticateToken_1.default, userController_1.getUserByUsername);
+router.get("/profile/:id", authenticateToken_1.default, userController_1.getUserById);
+router.post("/save/template/:templateId", authenticateToken_1.default, userController_1.saveTemplate);
+router.delete("/delete/savedTemplate/:templateId", authenticateToken_1.default, userController_1.deleteTemplate);
+router.get("/savedTemplates", authenticateToken_1.default, userController_1.getUserSavedTemplates);
+router.patch("/settings/changePrivacy", authenticateToken_1.default, userController_1.changePrivacy);
 exports.default = router;

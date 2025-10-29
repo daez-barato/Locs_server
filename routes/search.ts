@@ -5,7 +5,7 @@ import { fetchTrending, searchAll } from "../controllers/searchController";
 
 const router: Router = express.Router();
 
-router.get("/searchAll/:q", authenticateToken, searchAll);
-router.get("/trending", authenticateToken, fetchTrending);
+router.get("/searchAll/:q/:eventoffset/:templateoffset/:useroffset", authenticateToken, searchAll);
+router.get("/trending/:eventoffset/:templateoffset", authenticateToken, fetchTrending);
 
 export default router;

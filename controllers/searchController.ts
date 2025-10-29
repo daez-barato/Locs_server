@@ -1,19 +1,13 @@
-import { Pool } from "pg";
 import { AuthenticatedRequest } from "../middleware/authenticateToken";
 import { RequestHandler, Response } from "express";
-
-
-
-const pool = new Pool({
-    user: process.env.DATABASE_USER,
-    host: process.env.DATABASE_HOST,
-    password: process.env.DATABASE_PASSWORD,
-    database: process.env.DATABASE_NAME,
-    port: parseInt(process.env.DATABASE_PORT || "5432", 10),
-});
+import { createSignedUrl } from "../utils/imageUtils";
+import { pool } from "../server";
 
 export const searchAll: RequestHandler = async (req: AuthenticatedRequest, res: Response) =>{
     const q = decodeURI(req.params.q);
+    const eventOffset = parseInt(req.params.eventoffset) || 0;
+    const templateOffset = parseInt(req.params.templateoffset) || 0;
+    const userOffset = parseInt(req.params.useroffset) || 0;
 
 
     if (!q || typeof q !== "string") {
@@ -25,18 +19,45 @@ export const searchAll: RequestHandler = async (req: AuthenticatedRequest, res: 
         const searchTerm = `%${q}%`;
 
         const users = await pool.query(`
-            SELECT id, username AS title, image_url AS thumbnail, 'user' AS type
+            SELECT 
+                id, 
+                username, 
+                image_url AS profile_image, 
+                'user' AS type
             FROM users
             WHERE username ILIKE $1
-            LIMIT 20;
-        `, [searchTerm]);
+            LIMIT 10 OFFSET $2;
+        `, [searchTerm, userOffset]);
+
+        const cleanUsers = await Promise.all(
+        users.rows.map(async (row) => {
+            const signedUrl = await createSignedUrl(row.profile_image) // 1h expiry
+            return {
+            ...row,
+            profile_image: signedUrl,
+            };
+        })
+        );
 
         const templates = await pool.query(`
-            SELECT id, title, image_url AS thumbnail, 'template' AS type
+            SELECT id, 
+            title, 
+            image_url AS thumbnail, 
+            'template' AS type
             FROM templates
             WHERE title ILIKE $1 OR description ILIKE $1 AND public = TRUE
-            LIMIT 20;
-        `, [searchTerm]);
+            LIMIT 10 OFFSET $2;
+        `, [searchTerm, templateOffset]);
+
+        const templateRowsWithSignedUrls = await Promise.all(
+            templates.rows.map(async (row) => {
+                const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+                return {
+                ...row,
+                thumbnail: signedUrl,
+                };
+            })
+        );
 
         const events = await pool.query(`
             SELECT 
@@ -58,11 +79,20 @@ export const searchAll: RequestHandler = async (req: AuthenticatedRequest, res: 
             WHERE (t.title ILIKE $1 OR t.description ILIKE $1) AND e.expire_date > NOW() AND e.locked = false AND e.public = TRUE
             GROUP BY e.id, t.id
             ORDER BY e.expire_date ASC
-            LIMIT 20;
-        `, [searchTerm, req.user?.id]);
+            LIMIT 10 OFFSET $3;
+        `, [searchTerm, req.user?.id, eventOffset]);
 
+        const eventRowsWithSignedUrls = await Promise.all(
+        events.rows.map(async (row) => {
+            const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+            return {
+            ...row,
+            thumbnail: signedUrl,
+            };
+        })
+        );
 
-        res.status(200).json({events: events.rows, templates: templates.rows, users: users.rows});
+        res.status(200).json({events: eventRowsWithSignedUrls, templates: templateRowsWithSignedUrls, users: cleanUsers});
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Internal Server Error" });
@@ -70,6 +100,9 @@ export const searchAll: RequestHandler = async (req: AuthenticatedRequest, res: 
 };
 
 export const fetchTrending: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
+    const eventOffset = parseInt(req.params.eventoffset) || 0;
+    const templateOffset = parseInt(req.params.templateoffset) || 0;
+
     try {
         const eventResults = await pool.query(`
             SELECT 
@@ -91,22 +124,38 @@ export const fetchTrending: RequestHandler = async (req: AuthenticatedRequest, r
             WHERE e.expire_date > NOW() AND e.locked = false AND e.public = TRUE
             GROUP BY e.id, t.id
             ORDER BY e.expire_date ASC
-            LIMIT 10;
-        `, [req.user?.id]);
+            LIMIT 10 OFFSET $2;
+        `, [req.user?.id, eventOffset]);
 
-        console.log("Fetched trending events:", eventResults.rows);
+        const eventRowsWithSignedUrls = await Promise.all(
+        eventResults.rows.map(async (row) => {
+            const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+            return {
+            ...row,
+            thumbnail: signedUrl,
+            };
+        })
+        );
 
         const templateResults = await pool.query(`
             SELECT id, title, description, image_url AS thumbnail, 'template' AS type
             FROM templates
             WHERE public = TRUE
             ORDER BY created_at DESC
-            LIMIT 10;
-        `);
+            LIMIT 10 OFFSET $1;
+        `, [templateOffset]);
 
-        console.log("Fetched trending templates:", templateResults.rows);
+        const templateRowsWithSignedUrls = await Promise.all(
+        templateResults.rows.map(async (row) => {
+            const signedUrl = await createSignedUrl(row.thumbnail) // 1h expiry
+            return {
+            ...row,
+            thumbnail: signedUrl,
+            };
+        })
+        );
 
-        res.status(200).json({events: eventResults.rows, templates: templateResults.rows});
+        res.status(200).json({events: eventRowsWithSignedUrls, templates: templateRowsWithSignedUrls});
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Internal Server Error" });

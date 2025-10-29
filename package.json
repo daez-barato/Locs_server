@@ -11,22 +11,29 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@aws-sdk/s3-request-presigner": "^3.873.0",
+    "aws-sdk": "^2.1692.0",
     "bcrypt": "^5.1.1",
     "bcryptjs": "^3.0.2",
+    "client-s3": "github:aws-sdk/client-s3",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "livekit-server-sdk": "^2.12.0",
-    "pg": "^8.14.1"
+    "multer": "^2.0.2",
+    "pg": "^8.14.1",
+    "validator": "^13.15.20"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",
     "@types/jsonwebtoken": "^9.0.9",
+    "@types/multer": "^2.0.0",
     "@types/node": "^22.14.1",
     "@types/pg": "^8.11.13",
+    "@types/validator": "^13.15.4",
     "typescript": "^5.8.3"
   }
 }

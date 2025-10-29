@@ -1,15 +1,6 @@
 import { Response, RequestHandler } from "express";
-import { Pool } from "pg";
 import { AuthenticatedRequest } from "../middleware/authenticateToken";
-
-
-const pool = new Pool({
-    user: process.env.DATABASE_USER,
-    host: process.env.DATABASE_HOST,
-    password: process.env.DATABASE_PASSWORD,
-    database: process.env.DATABASE_NAME,
-    port: parseInt(process.env.DATABASE_PORT || "5432", 10),
-});
+import { pool } from "../server";
 
 export const getUserCoins: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user?.id;

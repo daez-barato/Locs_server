@@ -1,6 +1,8 @@
 import express, { Application } from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import { S3Client } from "@aws-sdk/client-s3";
+import { Pool } from "pg";
 
 // Load environment variables
 dotenv.config();
@@ -14,8 +16,23 @@ app.use(cors({
 }));
 
 
+export const s3 = new S3Client({
+  region: process.env.AWS_REGION!,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+});
 
 const PORT: number = parseInt(process.env.SERVER_PORT || "3000", 10);
+
+export const pool = new Pool({
+    user: process.env.DATABASE_USER,
+    host: process.env.DATABASE_HOST,
+    password: process.env.DATABASE_PASSWORD,
+    database: process.env.DATABASE_NAME,
+    port: parseInt(process.env.DATABASE_PORT || "5432", 10),
+});
 
 // Import routes
 import authRoutes from "./routes/auth";

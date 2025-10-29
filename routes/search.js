@@ -7,6 +7,6 @@ const express_1 = __importDefault(require("express"));
 const authenticateToken_1 = __importDefault(require("../middleware/authenticateToken"));
 const searchController_1 = require("../controllers/searchController");
 const router = express_1.default.Router();
-router.get("/searchAll/:q", authenticateToken_1.default, searchController_1.searchAll);
-router.get("/trending", authenticateToken_1.default, searchController_1.fetchTrending);
+router.get("/searchAll/:q/:eventoffset/:templateoffset/:useroffset", authenticateToken_1.default, searchController_1.searchAll);
+router.get("/trending/:eventoffset/:templateoffset", authenticateToken_1.default, searchController_1.fetchTrending);
 exports.default = router;

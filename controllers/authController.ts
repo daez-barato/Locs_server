@@ -11,7 +11,7 @@ export const register: RequestHandler = async (req: Request, res: Response) => {
 
     if (!username || !email || !password) {
         res.status(400).json({ error: "Username, email, and password are required." });
-        return; // Ensure the function exits after sending a response
+        return; 
     }
 
     try {

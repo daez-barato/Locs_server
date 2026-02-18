@@ -216,9 +216,12 @@ export const saveTemplate: RequestHandler = async (req: AuthenticatedRequest, re
     const {templateId} = req.params;
 
     try {
-        const result = await pool.query(`INSERT INTO saved_templates (user_id, template_id) VALUES ($1, $2)
-            ON CONFLICT (user_id, template_id) DO NOTHING
-            RETURNING *;`, 
+        const result = await pool.query(`
+                INSERT INTO saved_templates (user_id, template_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, template_id)
+                DO UPDATE SET user_id = EXCLUDED.user_id
+                RETURNING *;`, 
             [userId, templateId]);
 
         if (result.rowCount === 0) {

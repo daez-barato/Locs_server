@@ -188,9 +188,12 @@ const saveTemplate = async (req, res) => {
     const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
     const { templateId } = req.params;
     try {
-        const result = await server_1.pool.query(`INSERT INTO saved_templates (user_id, template_id) VALUES ($1, $2)
-            ON CONFLICT (user_id, template_id) DO NOTHING
-            RETURNING *;`, [userId, templateId]);
+        const result = await server_1.pool.query(`
+                INSERT INTO saved_templates (user_id, template_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, template_id)
+                DO UPDATE SET user_id = EXCLUDED.user_id
+                RETURNING *;`, [userId, templateId]);
         if (result.rowCount === 0) {
             res.status(409).json({ error: "Error updating template" });
             console.error("Error saving template");

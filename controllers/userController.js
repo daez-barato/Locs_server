@@ -1,8 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.changePrivacy = exports.getUserSavedTemplates = exports.deleteTemplate = exports.saveTemplate = exports.getUserById = void 0;
+exports.uploadProfilePicture = exports.changePrivacy = exports.getUserSavedTemplates = exports.deleteTemplate = exports.saveTemplate = exports.getUserById = void 0;
 const imageUtils_1 = require("../utils/imageUtils");
 const server_1 = require("../server");
+const client_s3_1 = require("@aws-sdk/client-s3");
 const getUserById = async (req, res) => {
     var _a, _b, _c, _d, _e;
     const userId = req.params.id;
@@ -280,3 +281,40 @@ const changePrivacy = async (req, res) => {
     }
 };
 exports.changePrivacy = changePrivacy;
+const uploadProfilePicture = async (req, res) => {
+    var _a, _b;
+    const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+    try {
+        const file = req.file;
+        let imageUrl = process.env.PLACEHOLDER_EVENT_IMAGE;
+        if (file) {
+            // generate unique filename
+            const filename = `users/${(_b = req.user) === null || _b === void 0 ? void 0 : _b.id}-${Date.now()}`;
+            // upload to S3
+            const params = {
+                Bucket: "odds-images",
+                Key: filename,
+                Body: file.buffer,
+                ContentType: file.mimetype,
+            };
+            await server_1.s3.send(new client_s3_1.PutObjectCommand(params));
+            imageUrl = filename;
+        }
+        ;
+        const result = await server_1.pool.query(`UPDATE users
+             SET image_url = $1
+             WHERE id = $2
+             RETURNING image_url;`, [imageUrl, userId]);
+        if (result.rowCount === 0) {
+            res.status(404).json({ error: "User not found" });
+            console.error("Error uploading profile picture: user not found");
+            return;
+        }
+        res.status(201).json({ success: true });
+    }
+    catch (err) {
+        console.error("Error uploading profile picture:", err);
+        res.status(500).json({ error: "Internal server error." });
+    }
+};
+exports.uploadProfilePicture = uploadProfilePicture;

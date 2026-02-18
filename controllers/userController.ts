@@ -1,7 +1,8 @@
 import { Response, RequestHandler } from "express";
 import { AuthenticatedRequest } from "../middleware/authenticateToken";
 import { createSignedUrl } from "../utils/imageUtils";
-import { pool } from "../server";
+import { pool, s3 } from "../server";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 export const getUserById: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.params.id;
@@ -321,3 +322,49 @@ export const changePrivacy: RequestHandler = async (req: AuthenticatedRequest, r
     res.status(500).json({ error: "Internal server error." });
   }
 };
+
+export const uploadProfilePicture: RequestHandler = async (req: AuthenticatedRequest, res: Response) => {
+    const userId = req.user?.id;
+
+    try {
+
+        const file = req.file;
+        let imageUrl = process.env.PLACEHOLDER_EVENT_IMAGE
+        if (file) {
+            // generate unique filename
+            const filename = `users/${req.user?.id}-${Date.now()}`;
+
+            // upload to S3
+            const params = {
+                Bucket: "odds-images",
+                Key: filename,
+                Body: file.buffer,
+                ContentType: file.mimetype,
+            };
+
+            await s3.send(new PutObjectCommand(params));
+            imageUrl = filename;
+        };
+
+        const result = await pool.query(
+            `UPDATE users
+             SET image_url = $1
+             WHERE id = $2
+             RETURNING image_url;`,
+            [imageUrl, userId]
+        );
+
+        if (result.rowCount === 0) {
+            res.status(404).json({ error: "User not found" });
+            console.error("Error uploading profile picture: user not found");
+            return;
+        }
+
+        console.log("Profile picture updated successfully for user ID:", userId);
+        res.status(201).json({ success: true});
+
+    } catch (err) {
+        console.error("Error uploading profile picture:", err);
+        res.status(500).json({ error: "Internal server error." });
+    }
+}

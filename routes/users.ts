@@ -11,6 +11,6 @@ router.post("/save/template/:templateId", authenticateToken, saveTemplate);
 router.delete("/delete/savedTemplate/:templateId", authenticateToken, deleteTemplate);
 router.get("/savedTemplates", authenticateToken, getUserSavedTemplates);
 router.patch("/settings/changePrivacy", authenticateToken, changePrivacy);
-router.post("/settings/uploadProfilePicture", upload.single("image"), authenticateToken, uploadProfilePicture);
+router.put("/settings/uploadProfilePicture", upload.single("image"), authenticateToken, uploadProfilePicture);
 
 export default router;
